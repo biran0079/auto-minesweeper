@@ -7,6 +7,10 @@ import random
 
 
 wh = win32gui.FindWindow(None, '扫雷')
+if not wh:
+    print("game not open")
+    exit(-1)
+
 dch = win32gui.GetWindowDC(wh)
 paddingX = 5
 paddingY = 2
@@ -143,8 +147,8 @@ def dfs(board, i, j, vis, screen):
     for p in getNeighbor(board, i, j, '-'):
         dfs(board, p[0], p[1], vis, screen)
 
-def explore(board, i, j):
-    dfs(board, i, j, set(), getScreenBitmap())
+def explore(board, i, j, screen):
+    dfs(board, i, j, set(), screen)
 
 def getNeighbor(board, i, j, c):
     return _getNeightBor(board, i, j, lambda x: x == c)
@@ -160,28 +164,6 @@ def _getNeightBor(board, i, j, f):
         if ti >= 0 and ti < row and tj >= 0 and tj < col and f(board[ti][tj]):
             res.append((ti, tj))
     return res
-
-def findMine(board):
-    for i in range(row):
-        for j in range(col):
-            c = board[i][j]
-            if c in {'1', '2', '3', '4', '5', '6'}:
-                flags = getNeighbor(board, i, j, 'f')
-                unknowns = getNeighbor(board, i, j, '-')
-                if unknowns and len(unknowns) + len(flags) == int(c):
-                    return unknowns[0]
-    return None
-
-def findFulfiledCell(board):
-    for i in range(row):
-        for j in range(col):
-            c = board[i][j]
-            if c in digits:
-                flags = getNeighbor(board, i, j, 'f')
-                unknowns = getNeighbor(board, i, j, '-')
-                if unknowns and len(flags) == int(c):
-                    return i,j
-    return None
 
 def randomUnknownCell(board):
     res = []
@@ -224,60 +206,79 @@ def contradiction(board, unknowns):
             return True
     return False
 
+def inductionOnUnknowns(board, unknowns, mines):
+    cands = []
+    for idx in getAllCombination(len(unknowns), mines):
+        for k in range(len(unknowns)):
+            p = unknowns[k]
+            if k in idx:
+                board[p[0]][p[1]] = 'f' # temporarily mark as flag
+            else:
+                 board[p[0]][p[1]] = '0' # place holder to skip inspection
+        if not contradiction(board, unknowns):
+            cands.append(idx)
+        for p in unknowns:
+            board[p[0]][p[1]] = '-'
+    res = set()
+    for k in range(len(unknowns)):
+        # if i is in all candidates, then it is a mine
+        # if i is in none of candidates, then it is not a mine
+        t = [k in cand for cand in cands]
+        if all(t):
+            res.add((unknowns[k], False, True))
+        if not any(t):
+            res.add((unknowns[k], True, False))
+    return res
+
 def induction(board):
+    res = set()
     for i in range(len(board)):
         for j in range(len(board[i])):
             if board[i][j] in digits:
                 flags = getNeighbor(board, i, j, 'f')
                 unknowns = getNeighbor(board, i, j, '-')
                 if unknowns:
-                    rem = int(board[i][j]) - len(flags)
-                    cands = []
-                    for idx in getAllCombination(len(unknowns), rem):
-                        for k in range(len(unknowns)):
-                            p = unknowns[k]
-                            if k in idx:
-                                board[p[0]][p[1]] = 'f' # temporarily mark as flag
-                            else:
-                                 board[p[0]][p[1]] = '0' # place holder to skip inspection
-                        if not contradiction(board, unknowns):
-                            cands.append(idx)
-                        for p in unknowns:
-                            board[p[0]][p[1]] = '-'
-                    if i == 9 and j == 19:
-                        print(cands)
-                    for k in range(len(unknowns)):
-                        # if i is in all candidates, then it is a mine
-                        # if i is in none of candidates, then it is not a mine
-                        t = [k in cand for cand in cands]
-                        if all(t):
-                            return unknowns[k], True
-                        if not any(t):
-                            return unknowns[k], False
-    return None, None
+                    res |= inductionOnUnknowns(board, unknowns, int(board[i][j]) - len(flags))
+    return res
+
+def finalPhaseInduction(board):
+    flags=0
+    unknowns=[]
+    for i in range(row):
+        for j in range(col):
+            if board[i][j] == 'f':
+                flags+=1
+            elif board[i][j] == '-':
+                unknowns.append((i,j))
+    if len(unknowns) > 10:
+        return set()
+    return inductionOnUnknowns(board, unknowns, 99 - flags)
+
+def findMoves(board):
+    res = induction(board)
+    if not res:
+        res = finalPhaseInduction(board)
+        if not res:
+            res = {
+                (randomUnknownCell(board), True, False),
+            }
+    return res
 
 
 def play():
+    win32gui.ShowWindow(wh, win32con.SW_SHOWMAXIMIZED)
+    win32gui.SetForegroundWindow(wh)
     board = getBoard()
     while not done(board):
-        p = findMine(board)
-        if p:
-            click(p[0], p[1], right=True)
-        else:
-            p = findFulfiledCell(board)
-            if p:
-                click(p[0], p[1], left=True, right=True)
-            else:
-                p, isMine = induction(board)
-                if p:
-                    click(p[0], p[1], left=not isMine, right=isMine)
-                else:
-                    p = randomUnknownCell(board)
-                    click(p[0], p[1], left=True)
+        moves = findMoves(board)
+        for p, left, right in moves:
+            click(p[0], p[1], left=left, right=right)
+            time.sleep(0.1)
         time.sleep(0.2)
-        explore(board, p[0], p[1])
+        screen = getScreenBitmap()
+        for p,_,_ in moves:
+            explore(board, p[0], p[1], screen)
         printBoard(board)
-        time.sleep(1)
 
 play()
 #print(getCellType(1,1, getScreenBitmap()))
